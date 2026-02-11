@@ -73,8 +73,12 @@ public class MusicListManage {
     public static ItemMusicCD.SongInfo get163Song(long id) throws Exception {
         NetEaseMusicSong pojo = GSON.fromJson(NetMusic.NET_EASE_WEB_API.song(id), NetEaseMusicSong.class);
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(pojo);
-        // 异步获取VIP直链，避免阻塞调用线程
-        tryGetVipDirectUrlAsync(id, songInfo);
+        // 在后台线程获取VIP直链，但等待完成再返回，避免主线程阻塞
+        if (songInfo.vip && GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
+            CompletableFuture.runAsync(() -> {
+                tryGetVipDirectUrlSync(id, songInfo);
+            }, VIP_EXECUTOR).join(); // 等待完成
+        }
         return songInfo;
     }
 
@@ -93,8 +97,12 @@ public class MusicListManage {
         }
         NetEaseMusicSong.Song netEaseMusicSong = new Gson().fromJson(mainSong, NetEaseMusicSong.Song.class);
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(netEaseMusicSong);
-        // 异步获取VIP直链，避免阻塞调用线程
-        tryGetVipDirectUrlAsync(netEaseMusicSong.getId(), songInfo);
+        // 在后台线程获取VIP直链，但等待完成再返回，避免主线程阻塞
+        if (songInfo.vip && GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
+            CompletableFuture.runAsync(() -> {
+                tryGetVipDirectUrlSync(netEaseMusicSong.getId(), songInfo);
+            }, VIP_EXECUTOR).join(); // 等待完成
+        }
         return songInfo;
     }
 
@@ -145,60 +153,7 @@ public class MusicListManage {
     }
 
     /**
-     * 异步尝试为VIP歌曲获取直链（不阻塞主线程）
-     * @param songId 歌曲ID
-     * @param songInfo 歌曲信息对象，如果成功获取直链会被修改
-     */
-    private static void tryGetVipDirectUrlAsync(long songId, ItemMusicCD.SongInfo songInfo) {
-        // 如果不是VIP歌曲，直接返回
-        if (!songInfo.vip) {
-            return;
-        }
-
-        // 检查配置是否启用VIP直链功能
-        if (!GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
-            NetMusic.LOGGER.debug("VIP direct URL feature is disabled in config");
-            return;
-        }
-
-        // 在后台线程异步处理
-        CompletableFuture.runAsync(() -> {
-            try {
-                NetMusic.LOGGER.info("Detected VIP song (ID: {}), attempting to get direct URL and lyrics in background...", songId);
-                String response = NetMusic.NET_EASE_WEB_API.getVipDirectUrl(songId);
-                VipDirectUrl vipDirectUrl = GSON.fromJson(response, VipDirectUrl.class);
-
-                if (vipDirectUrl != null && vipDirectUrl.hasValidUrl()) {
-                    // 成功获取直链，更新URL并取消VIP标记
-                    songInfo.songUrl = vipDirectUrl.getUrl();
-                    songInfo.vip = false;
-                    NetMusic.LOGGER.info("Successfully obtained direct URL for VIP song: {} (Level: {})", 
-                        songInfo.songName, vipDirectUrl.getLevel());
-                    
-                    // 同时获取VIP歌词
-                    try {
-                        String vipLyricResponse = NetMusic.NET_EASE_WEB_API.getVipLyric(songId);
-                        String standardLyricJson = VipLyricConverter.convertToStandardFormat(vipLyricResponse);
-                        if (VipLyricConverter.validateConvertedJson(standardLyricJson)) {
-                            songInfo.lyricJson = standardLyricJson;
-                            NetMusic.LOGGER.info("Successfully obtained lyrics for VIP song: {}", songInfo.songName);
-                        }
-                    } catch (Exception lyricError) {
-                        NetMusic.LOGGER.warn("Failed to get lyrics for VIP song: {}", songInfo.songName, lyricError);
-                    }
-                } else {
-                    NetMusic.LOGGER.warn("Failed to get direct URL for VIP song: {} (ID: {}), keeping VIP flag", 
-                        songInfo.songName, songId);
-                }
-            } catch (Exception e) {
-                NetMusic.LOGGER.error("Error while trying to get VIP direct URL for song ID: {}", songId, e);
-                // 保持VIP标记，歌曲将无法播放
-            }
-        }, VIP_EXECUTOR);
-    }
-    
-    /**
-     * 同步尝试为VIP歌曲获取直链（阻塞调用线程，仅用于必须同步的场景）
+     * 尝试为VIP歌曲获取直链
      * @param songId 歌曲ID
      * @param songInfo 歌曲信息对象，如果成功获取直链会被修改
      */
