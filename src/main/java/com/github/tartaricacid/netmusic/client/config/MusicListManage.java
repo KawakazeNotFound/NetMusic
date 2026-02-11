@@ -29,6 +29,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 public class MusicListManage {
     private static final int MAX_NUM = 100;
@@ -36,6 +39,13 @@ public class MusicListManage {
     private static final Path CONFIG_DIR = Paths.get("config").resolve("net_music");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("music.json");
     public static List<ItemMusicCD.SongInfo> SONGS = Lists.newArrayList();
+    
+    // 异步处理VIP歌曲的线程池
+    private static final Executor VIP_EXECUTOR = Executors.newFixedThreadPool(3, r -> {
+        Thread thread = new Thread(r, "NetMusic-VIP-Worker");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public static void loadConfigSongs() throws IOException {
         if (!Files.isDirectory(CONFIG_DIR)) {
@@ -63,8 +73,8 @@ public class MusicListManage {
     public static ItemMusicCD.SongInfo get163Song(long id) throws Exception {
         NetEaseMusicSong pojo = GSON.fromJson(NetMusic.NET_EASE_WEB_API.song(id), NetEaseMusicSong.class);
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(pojo);
-        // 如果是VIP歌曲，尝试获取直链
-        tryGetVipDirectUrl(id, songInfo);
+        // 异步获取VIP直链，避免阻塞调用线程
+        tryGetVipDirectUrlAsync(id, songInfo);
         return songInfo;
     }
 
@@ -83,8 +93,8 @@ public class MusicListManage {
         }
         NetEaseMusicSong.Song netEaseMusicSong = new Gson().fromJson(mainSong, NetEaseMusicSong.Song.class);
         ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(netEaseMusicSong);
-        // 如果是VIP歌曲，尝试获取直链
-        tryGetVipDirectUrl(netEaseMusicSong.getId(), songInfo);
+        // 异步获取VIP直链，避免阻塞调用线程
+        tryGetVipDirectUrlAsync(netEaseMusicSong.getId(), songInfo);
         return songInfo;
     }
 
@@ -109,11 +119,25 @@ public class MusicListManage {
         }
 
         SONGS.clear();
+        List<CompletableFuture<Void>> vipTasks = Lists.newArrayList();
+        
         for (NetEaseMusicList.Track track : pojo.getPlayList().getTracks()) {
             ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(track);
-            // 如果是VIP歌曲，尝试获取直链
-            tryGetVipDirectUrl(track.getId(), songInfo);
+            // 收集VIP歌曲的异步任务
+            if (songInfo.vip && GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
+                CompletableFuture<Void> vipTask = CompletableFuture.runAsync(() -> {
+                    tryGetVipDirectUrlSync(track.getId(), songInfo);
+                }, VIP_EXECUTOR);
+                vipTasks.add(vipTask);
+            }
             SONGS.add(songInfo);
+        }
+
+        // 等待所有VIP歌曲直链获取完成（并行处理，大幅提速）
+        if (!vipTasks.isEmpty()) {
+            NetMusic.LOGGER.info("Waiting for {} VIP songs to fetch direct URLs...", vipTasks.size());
+            CompletableFuture.allOf(vipTasks.toArray(new CompletableFuture[0])).join();
+            NetMusic.LOGGER.info("All VIP direct URLs fetched, saving playlist...");
         }
 
         Gson gson = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
@@ -121,11 +145,64 @@ public class MusicListManage {
     }
 
     /**
-     * 尝试为VIP歌曲获取直链
+     * 异步尝试为VIP歌曲获取直链（不阻塞主线程）
      * @param songId 歌曲ID
      * @param songInfo 歌曲信息对象，如果成功获取直链会被修改
      */
-    private static void tryGetVipDirectUrl(long songId, ItemMusicCD.SongInfo songInfo) {
+    private static void tryGetVipDirectUrlAsync(long songId, ItemMusicCD.SongInfo songInfo) {
+        // 如果不是VIP歌曲，直接返回
+        if (!songInfo.vip) {
+            return;
+        }
+
+        // 检查配置是否启用VIP直链功能
+        if (!GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
+            NetMusic.LOGGER.debug("VIP direct URL feature is disabled in config");
+            return;
+        }
+
+        // 在后台线程异步处理
+        CompletableFuture.runAsync(() -> {
+            try {
+                NetMusic.LOGGER.info("Detected VIP song (ID: {}), attempting to get direct URL and lyrics in background...", songId);
+                String response = NetMusic.NET_EASE_WEB_API.getVipDirectUrl(songId);
+                VipDirectUrl vipDirectUrl = GSON.fromJson(response, VipDirectUrl.class);
+
+                if (vipDirectUrl != null && vipDirectUrl.hasValidUrl()) {
+                    // 成功获取直链，更新URL并取消VIP标记
+                    songInfo.songUrl = vipDirectUrl.getUrl();
+                    songInfo.vip = false;
+                    NetMusic.LOGGER.info("Successfully obtained direct URL for VIP song: {} (Level: {})", 
+                        songInfo.songName, vipDirectUrl.getLevel());
+                    
+                    // 同时获取VIP歌词
+                    try {
+                        String vipLyricResponse = NetMusic.NET_EASE_WEB_API.getVipLyric(songId);
+                        String standardLyricJson = VipLyricConverter.convertToStandardFormat(vipLyricResponse);
+                        if (VipLyricConverter.validateConvertedJson(standardLyricJson)) {
+                            songInfo.lyricJson = standardLyricJson;
+                            NetMusic.LOGGER.info("Successfully obtained lyrics for VIP song: {}", songInfo.songName);
+                        }
+                    } catch (Exception lyricError) {
+                        NetMusic.LOGGER.warn("Failed to get lyrics for VIP song: {}", songInfo.songName, lyricError);
+                    }
+                } else {
+                    NetMusic.LOGGER.warn("Failed to get direct URL for VIP song: {} (ID: {}), keeping VIP flag", 
+                        songInfo.songName, songId);
+                }
+            } catch (Exception e) {
+                NetMusic.LOGGER.error("Error while trying to get VIP direct URL for song ID: {}", songId, e);
+                // 保持VIP标记，歌曲将无法播放
+            }
+        }, VIP_EXECUTOR);
+    }
+    
+    /**
+     * 同步尝试为VIP歌曲获取直链（阻塞调用线程，仅用于必须同步的场景）
+     * @param songId 歌曲ID
+     * @param songInfo 歌曲信息对象，如果成功获取直链会被修改
+     */
+    private static void tryGetVipDirectUrlSync(long songId, ItemMusicCD.SongInfo songInfo) {
         // 如果不是VIP歌曲，直接返回
         if (!songInfo.vip) {
             return;
