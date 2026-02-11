@@ -22,6 +22,7 @@ import net.minecraft.world.item.ItemStack;
 import org.anti_ad.mc.ipn.api.IPNIgnore;
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -116,38 +117,56 @@ public class CDBurnerMenuScreen extends AbstractContainerScreen<CDBurnerMenu> {
             this.tips = Component.translatable("gui.netmusic.cd_burner.no_music_id");
             return;
         }
+        
+        // 显示加载中提示
+        this.tips = Component.translatable("gui.netmusic.cd_burner.loading").withStyle(ChatFormatting.YELLOW);
+        
         Matcher djMatcher = DJ_ID_REG.matcher(textField.getValue());
         if (djMatcher.find()) {
             long djId = Long.parseLong(djMatcher.group(1));
-            try {
-                ItemMusicCD.SongInfo djSong = MusicListManage.getDjSong(djId);
-                if (StringUtils.isBlank(djSong.songUrl) || StringUtils.isBlank(djSong.songName)) {
-                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                    return;
+            boolean readOnly = this.readOnlyButton.selected();
+            
+            // 异步获取DJ歌曲信息
+            CompletableFuture.supplyAsync(() -> {
+                try {
+                    return MusicListManage.getDjSong(djId);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return null;
                 }
-                djSong.readOnly = this.readOnlyButton.selected();
-                NetworkHandler.CHANNEL.sendToServer(new SetMusicIDMessage(djSong));
-                return;
-            } catch (Exception e) {
-                this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                e.printStackTrace();
-                return;
-            }
+            }, Util.backgroundExecutor()).thenAcceptAsync(djSong -> {
+                if (djSong == null || StringUtils.isBlank(djSong.songUrl) || StringUtils.isBlank(djSong.songName)) {
+                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
+                } else {
+                    djSong.readOnly = readOnly;
+                    NetworkHandler.CHANNEL.sendToServer(new SetMusicIDMessage(djSong));
+                    this.tips = Component.translatable("gui.netmusic.cd_burner.success").withStyle(ChatFormatting.GREEN);
+                }
+            }, Minecraft.getInstance());
+            return;
         }
+        
         if (ID_REG.matcher(textField.getValue()).matches()) {
             long id = Long.parseLong(textField.getValue());
-            try {
-                ItemMusicCD.SongInfo song = MusicListManage.get163Song(id);
-                if (StringUtils.isBlank(song.songUrl) || StringUtils.isBlank(song.songName)) {
-                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                    return;
+            boolean readOnly = this.readOnlyButton.selected();
+            
+            // 异步获取歌曲信息
+            CompletableFuture.supplyAsync(() -> {
+                try {
+                    return MusicListManage.get163Song(id);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return null;
                 }
-                song.readOnly = this.readOnlyButton.selected();
-                NetworkHandler.CHANNEL.sendToServer(new SetMusicIDMessage(song));
-            } catch (Exception e) {
-                this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                e.printStackTrace();
-            }
+            }, Util.backgroundExecutor()).thenAcceptAsync(song -> {
+                if (song == null || StringUtils.isBlank(song.songUrl) || StringUtils.isBlank(song.songName)) {
+                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
+                } else {
+                    song.readOnly = readOnly;
+                    NetworkHandler.CHANNEL.sendToServer(new SetMusicIDMessage(song));
+                    this.tips = Component.translatable("gui.netmusic.cd_burner.success").withStyle(ChatFormatting.GREEN);
+                }
+            }, Minecraft.getInstance());
         } else {
             this.tips = Component.translatable("gui.netmusic.cd_burner.music_id_error");
         }

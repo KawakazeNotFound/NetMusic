@@ -2,12 +2,14 @@ package com.github.tartaricacid.netmusic.network.message;
 
 import com.github.tartaricacid.netmusic.client.config.MusicListManage;
 import net.minecraft.ChatFormatting;
+import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.network.NetworkEvent;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 public class GetMusicListMessage {
@@ -31,23 +33,42 @@ public class GetMusicListMessage {
         if (context.getDirection().getReceptionSide().isClient()) {
             context.enqueueWork(() -> {
                 LocalPlayer player = Minecraft.getInstance().player;
-                try {
-                    if (message.musicListId == RELOAD_MESSAGE) {
+                if (message.musicListId == RELOAD_MESSAGE) {
+                    // 重载配置是快速操作，不需要异步
+                    try {
                         MusicListManage.loadConfigSongs();
                         if (player != null) {
                             player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.reload.success"));
                         }
-                    } else {
-                        MusicListManage.add163List(message.musicListId);
+                    } catch (Exception e) {
                         if (player != null) {
-                            player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.add163.success"));
+                            player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.reload.fail").withStyle(ChatFormatting.RED));
                         }
+                        e.printStackTrace();
                     }
-                } catch (Exception e) {
+                } else {
+                    // 异步加载歌单，避免阻塞主线程
                     if (player != null) {
-                        player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.add163.fail").withStyle(ChatFormatting.RED));
+                        player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.add163.loading").withStyle(ChatFormatting.YELLOW));
                     }
-                    e.printStackTrace();
+                    CompletableFuture.runAsync(() -> {
+                        try {
+                            MusicListManage.add163List(message.musicListId);
+                        } catch (Exception e) {
+                            Minecraft.getInstance().execute(() -> {
+                                if (player != null) {
+                                    player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.add163.fail").withStyle(ChatFormatting.RED));
+                                }
+                            });
+                            e.printStackTrace();
+                            return;
+                        }
+                        Minecraft.getInstance().execute(() -> {
+                            if (player != null) {
+                                player.sendSystemMessage(Component.translatable("command.netmusic.music_cd.add163.success"));
+                            }
+                        });
+                    }, Util.backgroundExecutor());
                 }
             });
         }
