@@ -4,6 +4,8 @@ import com.github.tartaricacid.netmusic.NetMusic;
 import com.github.tartaricacid.netmusic.api.ExtraMusicList;
 import com.github.tartaricacid.netmusic.api.pojo.NetEaseMusicList;
 import com.github.tartaricacid.netmusic.api.pojo.NetEaseMusicSong;
+import com.github.tartaricacid.netmusic.api.pojo.VipDirectUrl;
+import com.github.tartaricacid.netmusic.config.GeneralConfig;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import com.google.common.collect.Lists;
 import com.google.gson.Gson;
@@ -59,7 +61,10 @@ public class MusicListManage {
 
     public static ItemMusicCD.SongInfo get163Song(long id) throws Exception {
         NetEaseMusicSong pojo = GSON.fromJson(NetMusic.NET_EASE_WEB_API.song(id), NetEaseMusicSong.class);
-        return new ItemMusicCD.SongInfo(pojo);
+        ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(pojo);
+        // 如果是VIP歌曲，尝试获取直链
+        tryGetVipDirectUrl(id, songInfo);
+        return songInfo;
     }
 
     public static ItemMusicCD.SongInfo getDjSong(long id) throws Exception {
@@ -76,7 +81,10 @@ public class MusicListManage {
             return new ItemMusicCD.SongInfo();
         }
         NetEaseMusicSong.Song netEaseMusicSong = new Gson().fromJson(mainSong, NetEaseMusicSong.Song.class);
-        return new ItemMusicCD.SongInfo(netEaseMusicSong);
+        ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(netEaseMusicSong);
+        // 如果是VIP歌曲，尝试获取直链
+        tryGetVipDirectUrl(netEaseMusicSong.getId(), songInfo);
+        return songInfo;
     }
 
     public static void add163List(long id) throws Exception {
@@ -101,10 +109,51 @@ public class MusicListManage {
 
         SONGS.clear();
         for (NetEaseMusicList.Track track : pojo.getPlayList().getTracks()) {
-            SONGS.add(new ItemMusicCD.SongInfo(track));
+            ItemMusicCD.SongInfo songInfo = new ItemMusicCD.SongInfo(track);
+            // 如果是VIP歌曲，尝试获取直链
+            tryGetVipDirectUrl(track.getId(), songInfo);
+            SONGS.add(songInfo);
         }
 
         Gson gson = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
         FileUtils.write(CONFIG_FILE.toFile(), gson.toJson(SONGS), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 尝试为VIP歌曲获取直链
+     * @param songId 歌曲ID
+     * @param songInfo 歌曲信息对象，如果成功获取直链会被修改
+     */
+    private static void tryGetVipDirectUrl(long songId, ItemMusicCD.SongInfo songInfo) {
+        // 如果不是VIP歌曲，直接返回
+        if (!songInfo.vip) {
+            return;
+        }
+
+        // 检查配置是否启用VIP直链功能
+        if (!GeneralConfig.ENABLE_VIP_DIRECT_URL.get()) {
+            NetMusic.LOGGER.debug("VIP direct URL feature is disabled in config");
+            return;
+        }
+
+        try {
+            NetMusic.LOGGER.info("Detected VIP song (ID: {}), attempting to get direct URL...", songId);
+            String response = NetMusic.NET_EASE_WEB_API.getVipDirectUrl(songId);
+            VipDirectUrl vipDirectUrl = GSON.fromJson(response, VipDirectUrl.class);
+
+            if (vipDirectUrl != null && vipDirectUrl.hasValidUrl()) {
+                // 成功获取直链，更新URL并取消VIP标记
+                songInfo.songUrl = vipDirectUrl.getUrl();
+                songInfo.vip = false;
+                NetMusic.LOGGER.info("Successfully obtained direct URL for VIP song: {} (Level: {})", 
+                    songInfo.songName, vipDirectUrl.getLevel());
+            } else {
+                NetMusic.LOGGER.warn("Failed to get direct URL for VIP song: {} (ID: {}), keeping VIP flag", 
+                    songInfo.songName, songId);
+            }
+        } catch (Exception e) {
+            NetMusic.LOGGER.error("Error while trying to get VIP direct URL for song ID: {}", songId, e);
+            // 保持VIP标记，歌曲将无法播放
+        }
     }
 }

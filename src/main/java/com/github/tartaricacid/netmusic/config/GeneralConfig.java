@@ -11,6 +11,7 @@ public class GeneralConfig {
 
     public static ForgeConfigSpec.BooleanValue ENABLE_PLAYER_LYRICS;
     public static ForgeConfigSpec.BooleanValue ENABLE_MAID_LYRICS;
+    public static ForgeConfigSpec.BooleanValue ENABLE_VIP_DIRECT_URL;
 
     public static ForgeConfigSpec init() {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -30,6 +31,9 @@ public class GeneralConfig {
 
         builder.comment("Whether to enable lyrics display for the maid");
         ENABLE_MAID_LYRICS = builder.define("EnableMaidLyrics", true);
+
+        builder.comment("Whether to enable automatic VIP song direct URL fetching");
+        ENABLE_VIP_DIRECT_URL = builder.define("EnableVipDirectUrl", true);
 
         builder.pop();
         return builder.build();
