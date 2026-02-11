@@ -2,6 +2,7 @@ package com.github.tartaricacid.netmusic.client.config;
 
 import com.github.tartaricacid.netmusic.NetMusic;
 import com.github.tartaricacid.netmusic.api.ExtraMusicList;
+import com.github.tartaricacid.netmusic.api.lyric.VipLyricConverter;
 import com.github.tartaricacid.netmusic.api.pojo.NetEaseMusicList;
 import com.github.tartaricacid.netmusic.api.pojo.NetEaseMusicSong;
 import com.github.tartaricacid.netmusic.api.pojo.VipDirectUrl;
@@ -137,7 +138,7 @@ public class MusicListManage {
         }
 
         try {
-            NetMusic.LOGGER.info("Detected VIP song (ID: {}), attempting to get direct URL...", songId);
+            NetMusic.LOGGER.info("Detected VIP song (ID: {}), attempting to get direct URL and lyrics...", songId);
             String response = NetMusic.NET_EASE_WEB_API.getVipDirectUrl(songId);
             VipDirectUrl vipDirectUrl = GSON.fromJson(response, VipDirectUrl.class);
 
@@ -147,6 +148,18 @@ public class MusicListManage {
                 songInfo.vip = false;
                 NetMusic.LOGGER.info("Successfully obtained direct URL for VIP song: {} (Level: {})", 
                     songInfo.songName, vipDirectUrl.getLevel());
+                
+                // 同时获取VIP歌词
+                try {
+                    String vipLyricResponse = NetMusic.NET_EASE_WEB_API.getVipLyric(songId);
+                    String standardLyricJson = VipLyricConverter.convertToStandardFormat(vipLyricResponse);
+                    if (VipLyricConverter.validateConvertedJson(standardLyricJson)) {
+                        songInfo.lyricJson = standardLyricJson;
+                        NetMusic.LOGGER.info("Successfully obtained lyrics for VIP song: {}", songInfo.songName);
+                    }
+                } catch (Exception lyricError) {
+                    NetMusic.LOGGER.warn("Failed to get lyrics for VIP song: {}", songInfo.songName, lyricError);
+                }
             } else {
                 NetMusic.LOGGER.warn("Failed to get direct URL for VIP song: {} (ID: {}), keeping VIP flag", 
                     songInfo.songName, songId);

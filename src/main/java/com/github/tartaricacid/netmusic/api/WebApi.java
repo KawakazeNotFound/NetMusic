@@ -120,6 +120,17 @@ public final class WebApi {
         return NetWorker.get(url, requestPropertyData);
     }
 
+    /**
+     * 获取VIP音乐的歌词
+     * @param songId 歌曲ID
+     * @return JSON响应字符串
+     * @throws IOException 网络异常
+     */
+    public String getVipLyric(long songId) throws IOException {
+        String url = String.format("https://ncm.206601.xyz/play/vrc?id=%d", songId);
+        return NetWorker.get(url, requestPropertyData);
+    }
+
     public HashMap<String, String> getRequestPropertyData() {
         return requestPropertyData;
     }

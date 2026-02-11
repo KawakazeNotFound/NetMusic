@@ -118,6 +118,8 @@ public class ItemMusicCD extends Item {
         public boolean readOnly = false;
         @SerializedName("artists")
         public List<String> artists = Lists.newArrayList();
+        @SerializedName("lyric_json")
+        public String lyricJson = null;
 
         public SongInfo() {
         }
@@ -177,6 +179,9 @@ public class ItemMusicCD extends Item {
                 this.artists = Lists.newArrayList();
                 tagList.forEach(nbt -> this.artists.add(nbt.getAsString()));
             }
+            if (tag.contains("lyric_json", Tag.TAG_STRING)) {
+                this.lyricJson = tag.getString("lyric_json");
+            }
         }
 
         public static SongInfo deserializeNBT(CompoundTag tag) {
@@ -196,6 +201,9 @@ public class ItemMusicCD extends Item {
                 ListTag nbt = new ListTag();
                 info.artists.forEach(name -> nbt.add(StringTag.valueOf(name)));
                 tag.put("artists", nbt);
+            }
+            if (StringUtils.isNoneBlank(info.lyricJson)) {
+                tag.putString("lyric_json", info.lyricJson);
             }
         }
     }

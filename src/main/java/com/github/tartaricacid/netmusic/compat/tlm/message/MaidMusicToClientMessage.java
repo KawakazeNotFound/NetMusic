@@ -35,7 +35,23 @@ public class MaidMusicToClientMessage {
         this.songName = songName;
     }
 
-    public static void showLyric(EntityMaid maid, String url, String songName, int timeSecond) {
+    public static void showLyric(EntityMaid maid, String url, String songName, int timeSecond, String lyricJson) {
+        // 优先使用预存的歌词（VIP歌词）
+        if (GeneralConfig.ENABLE_MAID_LYRICS.get() && lyricJson != null && !lyricJson.isEmpty()) {
+            // VIP歌词已转换为标准格式，尝试从JSON中提取ID
+            int songTimeTick = timeSecond * 20 + 20;
+            long gameTime = maid.level().getGameTime();
+            // 尝试从URL提取ID，如果失败则使用0（歌词系统会处理）
+            long musicId = 0;
+            Matcher matcher = PATTERN.matcher(url);
+            if (matcher.find()) {
+                musicId = Long.parseLong(matcher.group(1));
+            }
+            LyricChatBubbleData bubbleData = new LyricChatBubbleData(musicId, songName, songTimeTick, gameTime);
+            maid.getChatBubbleManager().addChatBubble(bubbleData);
+            return;
+        }
+
         // 如果是网易云的音乐，那么尝试添加歌词
         if (GeneralConfig.ENABLE_MAID_LYRICS.get() && url.startsWith(MUSIC_163_URL)) {
             Matcher matcher = PATTERN.matcher(url);

@@ -12,6 +12,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.network.NetworkEvent;
+import org.apache.commons.lang3.StringUtils;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
@@ -28,16 +29,28 @@ public class MusicToClientMessage {
     private final String url;
     private final int timeSecond;
     private final String songName;
+    private final String lyricJson;
 
     public MusicToClientMessage(BlockPos pos, String url, int timeSecond, String songName) {
+        this(pos, url, timeSecond, songName, null);
+    }
+
+    public MusicToClientMessage(BlockPos pos, String url, int timeSecond, String songName, String lyricJson) {
         this.pos = pos;
         this.url = url;
         this.timeSecond = timeSecond;
         this.songName = songName;
+        this.lyricJson = lyricJson;
     }
 
     public static MusicToClientMessage decode(FriendlyByteBuf buf) {
-        return new MusicToClientMessage(BlockPos.of(buf.readLong()), buf.readUtf(), buf.readInt(), buf.readUtf());
+        BlockPos pos = BlockPos.of(buf.readLong());
+        String url = buf.readUtf();
+        int timeSecond = buf.readInt();
+        String songName = buf.readUtf();
+        String lyricJson = buf.readUtf();
+        return new MusicToClientMessage(pos, url, timeSecond, songName, 
+            StringUtils.isBlank(lyricJson) ? null : lyricJson);
     }
 
     public static void encode(MusicToClientMessage message, FriendlyByteBuf buf) {
@@ -45,6 +58,7 @@ public class MusicToClientMessage {
         buf.writeUtf(message.url);
         buf.writeInt(message.timeSecond);
         buf.writeUtf(message.songName);
+        buf.writeUtf(message.lyricJson != null ? message.lyricJson : "");
     }
 
     public static void handle(MusicToClientMessage message, Supplier<NetworkEvent.Context> contextSupplier) {
@@ -60,8 +74,20 @@ public class MusicToClientMessage {
         // 使用数组方便在 lambda 表达式中修改
         LyricRecord[] record = new LyricRecord[1];
 
-        // 如果是网易云的音乐，那么尝试添加歌词
-        if (GeneralConfig.ENABLE_PLAYER_LYRICS.get() && message.url.startsWith(MUSIC_163_URL)) {
+        // 优先使用预存的歌词（VIP歌词）
+        if (GeneralConfig.ENABLE_PLAYER_LYRICS.get() && StringUtils.isNotBlank(message.lyricJson)) {
+            try {
+                record[0] = LyricParser.parseLyric(message.lyricJson, message.songName);
+                if (record[0] != null) {
+                    NetMusic.LOGGER.debug("Using pre-stored lyrics for song: {}", message.songName);
+                }
+            } catch (Exception e) {
+                NetMusic.LOGGER.error("Failed to parse pre-stored lyrics", e);
+            }
+        }
+
+        // 如果没有预存歌词且是网易云URL，尝试从API获取
+        if (record[0] == null && GeneralConfig.ENABLE_PLAYER_LYRICS.get() && message.url.startsWith(MUSIC_163_URL)) {
             Matcher matcher = PATTERN.matcher(message.url);
             if (matcher.find()) {
                 long musicId = Long.parseLong(matcher.group(1));
